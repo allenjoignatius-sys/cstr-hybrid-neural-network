@@ -16,6 +16,7 @@ def prompt_float(msg, default):
         raw = input(f"{msg} [default={default}]: ").strip()
         return float(raw) if raw else default
     except ValueError:
+        print(f"      Invalid input -> using default ({default}).")
         return default
 
 def prompt_int(msg, default):
@@ -23,6 +24,7 @@ def prompt_int(msg, default):
         raw = input(f"{msg} [default={default}]: ").strip()
         return int(raw) if raw else default
     except ValueError:
+        print(f"      Invalid input -> using default ({default}).")
         return default
 
 def prompt_choice(msg, options):
@@ -37,6 +39,7 @@ def prompt_choice(msg, options):
                 return choice
         except ValueError:
             pass
+        print(f"      Invalid input -> using default ({default}).")
 
 # --- ODE Definitions ---
 

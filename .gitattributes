@@ -1,2 +1,80 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# =============================================================================
+#  CSTR Hybrid Neural Network — .gitignore
+# =============================================================================
+
+# ── Generated project outputs ─────────────────────────────────────────────────
+data/
+models/
+results/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+.env/
+
+# ── Jupyter Notebooks ─────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Data & model files ────────────────────────────────────────────────────────
+*.csv
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.onnx
+*.npy
+*.npz
+
+# ── Plot & media outputs ──────────────────────────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+runs/
+
+# ── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/
+*.code-workspace
+
+# ── Windows system files ──────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── Mac system files ──────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Environment variables (never commit secrets) ──────────────────────────────
+.env
+.env.local
+*.env
+
+# ── Temporary files ───────────────────────────────────────────────────────────
+*.tmp
+*.temp
+*.swp
+*.bak
+*~

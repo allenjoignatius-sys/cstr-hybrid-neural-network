@@ -1,89 +1,70 @@
 """
-=============================================================================
-CSTR Hybrid Neural Network Project
 Script 3: Speed Benchmark & Final Evaluation
-=============================================================================
-Compares the wall-clock inference speed of the trained Neural Network against
-the original ODE solver across a user-defined set of operating conditions.
-Produces the plots required for the GitHub README.
-=============================================================================
+Compares NN inference speed vs ODE solver.
 """
- 
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import os, json, time, joblib
- 
+
 from scipy.integrate import odeint
 from sklearn.metrics import r2_score, mean_squared_error
- 
-# ─────────────────────────────────────────────────────────────────────────────
-# RE-IMPORT ODE FUNCTIONS (copy from 01_generate_data so script is standalone)
-# ─────────────────────────────────────────────────────────────────────────────
- 
+
+# --- Redefine ODEs for standalone eval ---
+
 def ode_irreversible(C, t, F, V, C_A0, k, n):
     C_A, C_B = C
     rate = k * max(C_A, 0) ** n
     return [(F/V)*(C_A0-C_A)-rate, (F/V)*(0.-C_B)+rate]
- 
+
 def ode_reversible(C, t, F, V, C_A0, kf, n_f, kr, n_r):
     C_A, C_B = C
     net = kf*max(C_A,0)**n_f - kr*max(C_B,0)**n_r
     return [(F/V)*(C_A0-C_A)-net, (F/V)*(0.-C_B)+net]
- 
+
 def ode_parallel(C, t, F, V, C_A0, k1, n1, k2, n2):
     C_A, C_B, C_C = C
     r1 = k1*max(C_A,0)**n1; r2 = k2*max(C_A,0)**n2
     return [(F/V)*(C_A0-C_A)-r1-r2, (F/V)*(0.-C_B)+r1, (F/V)*(0.-C_C)+r2]
- 
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
- 
+
+# --- Helpers ---
+
 def prompt_int(msg, default):
     try:
-        raw = input(f"  {msg} [default={default}]: ").strip()
+        raw = input(f"{msg} [default={default}]: ").strip()
         return int(raw) if raw else default
     except ValueError:
         return default
- 
+
 def load_artefacts():
-    """Load model, scalers, and metadata from the models/ folder."""
     required = ["models/mlp_model.pkl", "models/scaler_X.pkl",
                 "models/scaler_y.pkl", "models/model_meta.json",
                 "data/run_params.json"]
     for p in required:
         if not os.path.exists(p):
-            raise FileNotFoundError(
-                f"Missing: {p}\nRun scripts 01 and 02 first."
-            )
- 
-    mlp      = joblib.load("models/mlp_model.pkl")
+            raise FileNotFoundError(f"Missing: {p}. Run scripts 1 and 2 first.")
+
+    mlp = joblib.load("models/mlp_model.pkl")
     scaler_X = joblib.load("models/scaler_X.pkl")
     scaler_y = joblib.load("models/scaler_y.pkl")
-    with open("models/model_meta.json") as f: meta    = json.load(f)
-    with open("data/run_params.json")   as f: run_cfg = json.load(f)
+    with open("models/model_meta.json") as f: meta = json.load(f)
+    with open("data/run_params.json") as f: run_cfg = json.load(f)
     return mlp, scaler_X, scaler_y, meta, run_cfg
- 
-# ─────────────────────────────────────────────────────────────────────────────
-# ODE BATCH RUNNER (mirrors logic in 01_generate_data)
-# ─────────────────────────────────────────────────────────────────────────────
- 
+
 def run_ode_batch(F_arr, CA0_arr, run_cfg):
-    scheme   = run_cfg["scheme"]
-    V        = run_cfg["V"]
+    scheme = run_cfg["scheme"]
+    V = run_cfg["V"]
     kinetics = run_cfg["kinetics"]
-    t_end    = run_cfg.get("t_end", 200.0)
-    n_points = run_cfg.get("n_points", 200)
-    time_span = np.linspace(0, t_end, n_points)
- 
+    time_span = np.linspace(0, run_cfg.get("t_end", 200.0), run_cfg.get("n_points", 200))
+
     results = []
     for F, CA0 in zip(F_arr, CA0_arr):
         if scheme == 1:
             sol = odeint(ode_irreversible, [0., 0.], time_span,
                          args=(F, V, CA0, kinetics["k"], kinetics["n"]))
-            results.append(sol[-1])         # [CA_ss, CB_ss]
+            results.append(sol[-1])
         elif scheme == 2:
             sol = odeint(ode_reversible, [CA0, 0.], time_span,
                          args=(F, V, CA0, kinetics["kf"], kinetics["n_f"],
@@ -95,56 +76,41 @@ def run_ode_batch(F_arr, CA0_arr, run_cfg):
                                kinetics["k2"], kinetics["n2"]))
             results.append(sol[-1])
     return np.array(results)
- 
-# ─────────────────────────────────────────────────────────────────────────────
-# BENCHMARK
-# ─────────────────────────────────────────────────────────────────────────────
- 
+
 def benchmark(n_bench, mlp, scaler_X, scaler_y, meta, run_cfg):
     np.random.seed(99)
-    F_arr   = np.random.uniform(run_cfg["F_min"],   run_cfg["F_max"],   n_bench)
+    F_arr = np.random.uniform(run_cfg["F_min"], run_cfg["F_max"], n_bench)
     CA0_arr = np.random.uniform(run_cfg["CA0_min"], run_cfg["CA0_max"], n_bench)
- 
     feature_cols = meta["feature_cols"]
-    target_cols  = meta["target_cols"]
- 
-    # Build input matrix in same column order used during training
-    X_bench = pd.DataFrame({"Flow_Rate_L_min": F_arr,
-                             "Inlet_Conc_mol_L": CA0_arr})[feature_cols].values
- 
-    # ── ODE timing ────────────────────────────────────────────────────────────
-    print(f"\n  Running {n_bench} ODE solves … ", end="", flush=True)
+
+    X_bench = pd.DataFrame({
+        "Flow_Rate_L_min": F_arr, "Inlet_Conc_mol_L": CA0_arr
+    })[feature_cols].values
+
+    # Timing ODE
+    print(f"\nRunning {n_bench} ODE solves...")
     t0 = time.perf_counter()
     y_ode = run_ode_batch(F_arr, CA0_arr, run_cfg)
     ode_time = time.perf_counter() - t0
-    print(f"done  ({ode_time:.3f}s  /  {ode_time/n_bench*1000:.2f}ms per solve)")
- 
-    # ── NN timing ─────────────────────────────────────────────────────────────
-    print(f"  Running {n_bench} NN inferences … ", end="", flush=True)
+
+    # Timing NN
+    print(f"Running {n_bench} NN inferences...")
     t0 = time.perf_counter()
-    X_scaled  = scaler_X.transform(X_bench)
-    y_pred_sc = mlp.predict(X_scaled)
+    y_pred_sc = mlp.predict(scaler_X.transform(X_bench))
     if y_pred_sc.ndim == 1:
         y_pred_sc = y_pred_sc.reshape(-1, 1)
     y_nn = scaler_y.inverse_transform(y_pred_sc)
     nn_time = time.perf_counter() - t0
-    print(f"done  ({nn_time:.3f}s  /  {nn_time/n_bench*1000:.4f}ms per inference)")
- 
+
     speedup = ode_time / nn_time
-    print(f"\n  🚀  Speedup : {speedup:.0f}× faster")
- 
-    # ── Accuracy vs ODE ground truth ─────────────────────────────────────────
-    # Map ODE output columns to target columns by position
-    n_targets = len(target_cols)
-    # Rebuild derived columns to match exactly what script 01 saved
+    print(f"Speedup: {speedup:.1f}x faster")
+
+    # Reconstruct targets for R2 score
     scheme = run_cfg["scheme"]
     records = []
     for i, (F, CA0) in enumerate(zip(F_arr, CA0_arr)):
         raw = y_ode[i]
-        if scheme == 1:
-            CA_ss, CB_ss = raw[0], raw[1]
-            records.append([CA_ss, CB_ss, (CA0 - CA_ss) / CA0 if CA0 > 0 else 0])
-        elif scheme == 2:
+        if scheme == 1 or scheme == 2:
             CA_ss, CB_ss = raw[0], raw[1]
             records.append([CA_ss, CB_ss, (CA0 - CA_ss) / CA0 if CA0 > 0 else 0])
         else:
@@ -153,114 +119,54 @@ def benchmark(n_bench, mlp, scaler_X, scaler_y, meta, run_cfg):
 
     ode_df = pd.DataFrame(records, columns=meta["target_cols"])
     y_true = ode_df[meta["target_cols"]].values
- 
-    r2   = r2_score(y_true, y_nn)
+
+    r2 = r2_score(y_true, y_nn)
     rmse = np.sqrt(mean_squared_error(y_true, y_nn))
-    print(f"  📐  R² vs ODE  : {r2:.6f}")
-    print(f"  📐  RMSE       : {rmse:.6f}  mol/L")
- 
+    print(f"Overall R2: {r2:.4f}")
+
     return F_arr, CA0_arr, y_true, y_nn, ode_time, nn_time, speedup, r2, rmse
- 
-# ─────────────────────────────────────────────────────────────────────────────
-# COMPREHENSIVE REPORT FIGURE (for GitHub README)
-# ─────────────────────────────────────────────────────────────────────────────
- 
-def build_report_figure(y_true, y_nn, target_cols, ode_time, nn_time,
-                         speedup, r2, n_bench, out_dir):
+
+def build_report_figure(y_true, y_nn, target_cols, ode_time, nn_time, speedup, r2, n_bench, out_dir):
     fig = plt.figure(figsize=(14, 10))
-    fig.suptitle("CSTR Hybrid Neural Network — Benchmark Report",
-                 fontsize=16, fontweight="bold", y=0.98)
- 
+    fig.suptitle("Benchmark Report", fontsize=16, fontweight="bold")
     gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.45, wspace=0.38)
- 
-    # ── Panel 1: Speed comparison (bar chart) ─────────────────────────────────
+
     ax_speed = fig.add_subplot(gs[0, 0])
-    bars = ax_speed.bar(["ODE Solver", "Neural Network"],
-                         [ode_time * 1000, nn_time * 1000],
-                         color=["#64748b", "#2563eb"], edgecolor="white", width=0.5)
-    ax_speed.set_ylabel("Total time for benchmark (ms)")
-    ax_speed.set_title(f"Speed Comparison\n({n_bench} predictions)")
-    ax_speed.bar_label(bars, fmt="%.1f ms", padding=3, fontsize=9)
+    bars = ax_speed.bar(["ODE", "NN"], [ode_time * 1000, nn_time * 1000], color=["#64748b", "#2563eb"])
+    ax_speed.set_ylabel("Time (ms)")
     ax_speed.set_yscale("log")
-    ax_speed.grid(axis="y", alpha=0.3)
-    ax_speed.text(0.5, 0.82, f"{speedup:.0f}× faster",
-                  transform=ax_speed.transAxes, ha="center",
-                  fontsize=14, color="#2563eb", fontweight="bold")
- 
-    # ── Panels 2–N: Parity plots per target ──────────────────────────────────
+    ax_speed.set_title(f"Speed ({n_bench} runs)")
+    ax_speed.bar_label(bars, fmt="%.1f ms", padding=3)
+
     n_targets = y_true.shape[1]
     positions = [(0, 1), (0, 2), (1, 0), (1, 1), (1, 2)]
     for i in range(min(n_targets, 5)):
-        r, c   = positions[i]
-        ax     = fig.add_subplot(gs[r, c])
+        r, c = positions[i]
+        ax = fig.add_subplot(gs[r, c])
         yt, yp = y_true[:, i], y_nn[:, i]
-        lims   = [min(yt.min(), yp.min()), max(yt.max(), yp.max())]
-        ax.scatter(yt, yp, alpha=0.25, s=6, color="#2563eb", edgecolors="none")
-        ax.plot(lims, lims, "r--", linewidth=1.5)
-        ax.set_xlabel(f"ODE — {target_cols[i]}", fontsize=9)
-        ax.set_ylabel(f"NN — {target_cols[i]}", fontsize=9)
-        r2_i = r2_score(yt, yp)
-        ax.set_title(f"Parity: {target_cols[i]}\nR² = {r2_i:.4f}", fontsize=10)
+        ax.scatter(yt, yp, alpha=0.25, s=6)
+        lims = [min(yt.min(), yp.min()), max(yt.max(), yp.max())]
+        ax.plot(lims, lims, "r--")
+        ax.set_title(f"{target_cols[i]}")
         ax.grid(alpha=0.3)
- 
-    # ── Stats text box ────────────────────────────────────────────────────────
-    stats = (f"Benchmark ({n_bench} samples)\n"
-             f"ODE wall time :  {ode_time*1000:.1f} ms\n"
-             f"NN  wall time :  {nn_time*1000:.2f} ms\n"
-             f"Speedup       :  {speedup:.0f}×\n"
-             f"Overall R²    :  {r2:.4f}")
-    fig.text(0.01, 0.01, stats, fontsize=9, family="monospace",
-             verticalalignment="bottom",
-             bbox=dict(facecolor="lightyellow", alpha=0.8, boxstyle="round"))
- 
+
     path = os.path.join(out_dir, "benchmark_report.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"\n  📊  Report figure saved → {path}")
     return path
- 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
- 
+
 def main():
-    print("\n" + "═"*60)
-    print("  CSTR HYBRID MODEL — BENCHMARK & EVALUATION")
-    print("═"*60)
- 
+    print("\n--- Benchmark & Eval ---")
     mlp, scaler_X, scaler_y, meta, run_cfg = load_artefacts()
- 
-    n_bench = prompt_int("Number of predictions for the benchmark", 1000)
- 
-    F_arr, CA0_arr, y_true, y_nn, ode_time, nn_time, speedup, r2, rmse = \
-        benchmark(n_bench, mlp, scaler_X, scaler_y, meta, run_cfg)
- 
+    n_bench = prompt_int("Num predictions to benchmark", 1000)
+
+    _, _, y_true, y_nn, ode_time, nn_time, speedup, r2, _ = benchmark(
+        n_bench, mlp, scaler_X, scaler_y, meta, run_cfg
+    )
+
     os.makedirs("results", exist_ok=True)
-    path = build_report_figure(y_true, y_nn, meta["target_cols"],
-                                ode_time, nn_time, speedup, r2, n_bench, "results")
- 
-    # ── Resume-ready summary ──────────────────────────────────────────────────
-    print("\n" + "─"*60)
-    print("  ✅  RESUME / README BULLET POINTS")
-    print("─"*60)
-    scheme_names = {1: "non-isothermal CSTR (A→B)",
-                    2: "reversible CSTR (A⇌B)",
-                    3: "parallel-reaction CSTR (A→B/C)"}
-    scheme_label = scheme_names.get(run_cfg["scheme"], "CSTR")
-    print(f"""
-  • Developed a Hybrid Neural Network model for a {scheme_label},
-    achieving a {speedup:.0f}× reduction in computation time compared
-    to a SciPy ODE solver, with an R² of {r2:.4f} on held-out data.
- 
-  • Built a fully automated Python pipeline (data generation →
-    NN training → benchmarking) with interactive parameter
-    selection and generalised nth-order reaction kinetics.
- 
-  • Demonstrated real-time suitability of surrogate models for
-    Model Predictive Control (MPC) applications.
-""")
-    print("─"*60)
-    print(f"\n  Full benchmark figure → {path}\n")
- 
+    path = build_report_figure(y_true, y_nn, meta["target_cols"], ode_time, nn_time, speedup, r2, n_bench, "results")
+    print(f"Report saved to {path}")
+
 if __name__ == "__main__":
     main()
